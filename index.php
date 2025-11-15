@@ -13,32 +13,55 @@ if ($conn->connect_error) {
     die("Eroare DB: " . $conn->connect_error);
 }
 
-// ✅ Funcție pentru găsirea primei date libere începând de azi înainte
+// ----------------------------------------------------------
+// 🔥 Funcție pentru găsirea primei date libere începând de azi
+// ----------------------------------------------------------
 function generateNextDate($conn) {
-    $date = date("Y-m-d"); // începem cu AZI
+    $date = date("Y-m-d"); // Start: azi
 
     while (true) {
-        // verificăm dacă data este ocupată
         $check = $conn->prepare("SELECT id FROM users WHERE data = ?");
         $check->bind_param("s", $date);
         $check->execute();
         $exists = $check->get_result()->num_rows > 0;
 
-        if (!$exists) {
-            return $date; // ✅ dată liberă găsită
-        }
+        if (!$exists) return $date;
 
-        // mergem la ziua următoare (automat trece la luna următoare dacă e cazul)
         $date = date("Y-m-d", strtotime($date . " +1 day"));
     }
 }
 
-// ✅ Procesare Login/Creare cont
+// ----------------------------------------------------------------
+// 🔥 NEW: Actualizare AUTOMATĂ pentru TOȚI utilizatorii cu date expirate
+// ----------------------------------------------------------------
+function updateAllExpiredDates($conn) {
+    $today = date("Y-m-d");
+
+    // Selectăm toți userii cu date în trecut
+    $query = $conn->prepare("SELECT id, data FROM users WHERE data < ?");
+    $query->bind_param("s", $today);
+    $query->execute();
+    $result = $query->get_result();
+
+    while ($row = $result->fetch_assoc()) {
+        $newDate = generateNextDate($conn);
+
+        $up = $conn->prepare("UPDATE users SET data = ? WHERE id = ?");
+        $up->bind_param("si", $newDate, $row["id"]);
+        $up->execute();
+    }
+}
+
+// 🔥 Executăm actualizarea la fiecare acces/login
+updateAllExpiredDates($conn);
+
+// ---------------------------------------------------------------
+// 🔥 Procesare Login / Creare Cont
+// ---------------------------------------------------------------
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $nume_complet = trim($_POST["nume_complet"]);
     $parola = $_POST["parola"];
     $today = date("Y-m-d");
-    $currentMonth = date("m");
 
     // verificăm dacă userul există
     $stmt = $conn->prepare("SELECT * FROM users WHERE nume_complet = ?");
@@ -47,7 +70,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $result = $stmt->get_result();
 
     if ($result->num_rows > 0) {
-        // 🔹 LOGIN
+        // LOGIN
         $user = $result->fetch_assoc();
 
         if (!password_verify($parola, $user["parola"])) {
@@ -55,23 +78,23 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         } else {
             $_SESSION["nume_complet"] = $user["nume_complet"];
 
-            // Dacă data userului este în trecut → se actualizează
-            if ($user["data"] < $today) {
-                $newDate = generateNextDate($conn);
+            // Asigurăm dată validă (deja actualizată global)
+            $validDate = $user["data"];
+            if ($validDate < $today) {
+                $validDate = generateNextDate($conn);
                 $up = $conn->prepare("UPDATE users SET data=? WHERE id=?");
-                $up->bind_param("si", $newDate, $user["id"]);
+                $up->bind_param("si", $validDate, $user["id"]);
                 $up->execute();
-                $_SESSION["data"] = $newDate;
-            } else {
-                $_SESSION["data"] = $user["data"];
             }
+
+            $_SESSION["data"] = $validDate;
 
             header("Location: main.php");
             exit();
         }
 
     } else {
-        // 🔹 CREARE CONT NOU
+        // CREARE CONT NOU
         $hashedPass = password_hash($parola, PASSWORD_DEFAULT);
         $newDate = generateNextDate($conn);
 
